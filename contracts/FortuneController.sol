@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: MIT
-// An example of a consumer contract that also owns and manages the subscription
 pragma solidity ^0.8.7;
 
-import "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
-import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@chainlink/contracts/src/v0.8/KeeperCompatible.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBase.sol";
 
 import "./interface/ISeeker.sol";
 
-contract FortuneController is VRFConsumerBaseV2, Ownable {
-    VRFCoordinatorV2Interface COORDINATOR;
-    LinkTokenInterface LINKTOKEN;
+contract FortuneController is VRFConsumerBase, Ownable {
     ISeeker SEEKER;
     address SEEKER_ADDRESS;
-    uint64 LINK_SUBSCRIPTION_ID;
+    uint256 LINK_FEE = 0.0001 * 10**18; // 0.0001 LINK Fee on Polygon
 
     // The gas lane to use, which specifies the maximum gas price to bump to.
     // For a list of available gas lanes on each network,
@@ -22,64 +18,13 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
     bytes32 keyHash =
         0xd89b2bf150e3b9e13446986e571fb9cab24b13cea0a43ea20a6049a85cc807cc;
 
-    // A reasonable default is 100000, but this value could be different
-    // on other networks.
-    uint32 callbackGasLimit = 100000;
-
-    // The default is 3, but you can set this higher.
-    uint16 requestConfirmations = 3;
-
-    // For this example, retrieve 2 random values in one request.
-    // Cannot exceed VRFCoordinatorV2.MAX_NUM_WORDS.
-    uint32 numWords = 1;
-
-    // Rinkeby coordinator. For other networks,
-    // see https://docs.chain.link/docs/vrf-contracts/#configurations
-
-    // Rinkeby LINK token contract. For other networks, see
-    // https://docs.chain.link/docs/vrf-contracts/#configurations
-
     constructor(
         address vrfCoordinator,
         address linkTokenContract,
-        address seekerContract,
-        uint64 linkSubscriptionId
-    ) VRFConsumerBaseV2(vrfCoordinator) {
-        COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
-        LINKTOKEN = LinkTokenInterface(linkTokenContract);
+        address seekerContract
+    ) VRFConsumerBase(vrfCoordinator, linkTokenContract) {
         SEEKER = ISeeker(seekerContract);
         SEEKER_ADDRESS = seekerContract;
-        LINK_SUBSCRIPTION_ID = linkSubscriptionId;
-        //Create a new subscription when you deploy the contract.
-        // createNewSubscription();
-    }
-
-    enum RequestTypes {
-        SPAWN,
-        ATTACK_MOB,
-        ATTACK_PLAYER
-    }
-
-    // Assumes the subscription is funded sufficiently.
-    function requestRandomWords() private {
-        // Will revert if subscription is not set and funded.
-        uint256 requestId = COORDINATOR.requestRandomWords(
-            keyHash,
-            LINK_SUBSCRIPTION_ID,
-            requestConfirmations,
-            callbackGasLimit,
-            numWords
-        );
-
-        _wordRequests[requestId] = WordRequest(requestId);
-    }
-
-    function fulfillRandomWords(
-        uint256 requestId, /* requestId */
-        uint256[] memory randomWords
-    ) internal override {
-        // s_randomWords = randomWords;
-        WordRequest memory wordRequest = _wordRequests[requestId];
     }
 
     // State
@@ -88,18 +33,57 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
 
     struct Seeker {
         uint256 atom;
+        uint256 id;
         string name;
         string location;
+        uint16 hp;
+        uint16 strength;
+        uint16 dexterity;
+        uint16 agility;
+        uint16 intelligence;
+        uint16 will;
+        uint16 luck;
+        uint16 special;
     }
 
-    struct WordRequest {
-        uint256 requestId;
+    enum RequestType {
+        SPAWN,
+        ATTACK_MOB,
+        ATTACK_PLAYER
+    }
+
+    struct NumberRequest {
+        RequestType requestType;
     }
 
     // Mapping from seeker ID to Seeker
     mapping(address => uint256[]) private _seekerLedger;
     mapping(uint256 => Seeker) private _seekers;
-    mapping(uint256 => WordRequest) private _wordRequests;
+    mapping(bytes32 => NumberRequest) private numberRequests;
+
+    function getRandomNumber(RequestType requestType) internal {
+        require(
+            LINK.balanceOf(address(this)) >= LINK_FEE,
+            "Not enough LINK - fill contract with faucet"
+        );
+        bytes32 requestId = requestRandomness(keyHash, LINK_FEE);
+        numberRequests[requestId] = NumberRequest(requestType);
+    }
+
+    function fulfillRandomness(bytes32 requestId, uint256 randomness)
+        internal
+        override
+    {
+        handleRequest(requestId, randomness);
+    }
+
+    function handleRequest(bytes32 requestId, uint256 randomness) private {
+        NumberRequest memory numberRequest = numberRequests[requestId];
+
+        if (numberRequest.requestType == RequestType.SPAWN) {} else if (
+            numberRequest.requestType == RequestType.ATTACK_MOB
+        ) {}
+    }
 
     // Creation
     function spawnNewSeeker() external payable {
@@ -109,13 +93,15 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
 
         SEEKER.spawnNewSeeker(msg.sender, seekerId);
 
-        assignSeeker(seekerId);
+        // assignSeeker(seekerId);
 
         CURRENT_SEEKERS++;
     }
 
+    function moldSeeker() private {}
+
     function assignSeeker(uint256 seekerId) private {
-        _seekers[seekerId] = Seeker(100, "Unknown", "Default");
+        // _seekers[seekerId] = Seeker(100, "Unknown", "Default");
     }
 
     // Seeker Functionality
@@ -138,7 +124,7 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
     function sellItem() public {}
 
     // Public Seeker Settings
-    function changeSeekerName(uint256 seekerId, string memory newName)
+    function setSeekerName(uint256 seekerId, string memory newName)
         public
         onlySeekerOwner(seekerId)
     {
@@ -146,7 +132,7 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
     }
 
     // Internal
-    function changeMaxSeekers(uint256 amount) public onlyOwner {
+    function setMaxSeekers(uint256 amount) public onlyOwner {
         MAX_SEEKERS = amount;
     }
 
@@ -161,7 +147,7 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
         );
 
         // Delete from current owner's inventory and add to new owner's inventory.
-        if (from != msg.sender) {
+        if (from != SEEKER_ADDRESS) {
             findAndRemoveSeeker(from, seekerId);
         }
 
@@ -182,9 +168,9 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
         }
     }
 
-    function setLinkSubscriptionId(uint64 id) external onlyOwner {
-        LINK_SUBSCRIPTION_ID = id;
-    }
+    // function setLinkSubscriptionId(uint64 id) external onlyOwner {
+    //     // LINK_SUBSCRIPTION_ID = id;
+    // }
 
     // Create a new subscription when the contract is initially deployed.
     // function createNewSubscription() private onlyOwner {
@@ -224,9 +210,9 @@ contract FortuneController is VRFConsumerBaseV2, Ownable {
 
     // Transfer this contract's funds to an address.
     // 1000000000000000000 = 1 LINK
-    function withdraw(uint256 amount, address to) external onlyOwner {
-        LINKTOKEN.transfer(to, amount);
-    }
+    // function withdraw(uint256 amount, address to) external onlyOwner {
+    //     LINKTOKEN.transfer(to, amount);
+    // }
 
     modifier onlySeekerOwner(uint256 seekerId) {
         require(
